@@ -1,0 +1,127 @@
+---
+title: "Classifying Weight Lifting Exercise Using Practical Machine Learning Project"
+author: "Greg"
+date: "January 20, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Summary
+Built machine learning algorithm to detect how weight lifting excerises were preformed by six health subjects.  The algorithm was built using gradient boosting machine model to classify the activity based on data from accelerometers worn by the participants. 
+
+## Background
+Fitness and excercise tracking devices are ables to capture a large amount of data. Generally speaking that data is used to track the ammount of activity, but rarely is it used to quantify how well the exercise is performed. 
+
+The data for this ananysis comes from a study where 6 participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways while wearing acclerometers on the belt, forearm, arm, and the dumbell itself. Each repetition was classfied into 5 categories by an expert observing the participant:
+
+* Class A - exactly according to the specification,
+* Class B - throwing the elbows to the front,
+* Class C - lifting the dumbbell only halfway,
+* Class D - lowering the dumbbell only halfway,
+* Class E - throwing the hips to the front.
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.We will attempt to build a prediction model that can correctly classify exercise using the accelerometer data.
+
+For this ananlysis Gradient boosting machine (GBM) learning was used. GBM is a techique for classifiction problems to produce a prediction model using decision trees. It is useful when there are a large number of predictors available not none of them have strong predictive power. It builds that the model over many iterations through boosting in order to optimize a loss function. 
+
+## Data sets
+The data for this project was generously made available by the authors of the original study:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H.: Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013  http://groupware.les.inf.puc-rio.br/har
+
+The training dataset for this project is available at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test dataset is available at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The training data cotains 19622 observations of the exercise performed by the 6 participants.  
+
+## Analysis
+
+### Data Cleaning 
+The first step is to load the caret package, download the training data and read it into a data frame.
+
+```{r loaddata, message=FALSE}
+library(caret)
+
+temp<-tempfile()
+trainurl <- url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+training <- read.csv(trainurl,na.strings = "NA")
+```
+
+There are columns with large number of NAs and blanks, so those variables are removed:
+
+```{r}
+nalist<-colSums(is.na(training))
+cleantrain <- training[,names(nalist[nalist==0])]
+
+blanklist<- colSums(""==cleantrain)
+cleantrain <- cleantrain[,names(blanklist[blanklist==0])]
+```
+
+After reading the documentation for the data set the following variables were also removed:
+
+* X - Is is the record ID
+* username - not meaningful to a general prediction algo
+* raw time stamps 1&2 - These will be highly correlated with date time1, so they will be droped.
+
+```{r}
+trainset<- cleantrain[,5:60]
+```
+
+Last is to determine if there are any predictors that have no or near zero variance. The nearzero variance returns a vector of column numbers that have near zero variance.  so you can just subset the data set to exclude those values.  In my case, after removing the index column and the ones with high levels of NAs the only remaining coulmn is column 2.
+```{r}
+nzvTrain <- nearZeroVar(cleantrain)
+trainset <- trainset[,-c(nzvTrain)]
+```
+
+## Training the Prediction Model
+As stated in the introduction Gradient Boosting Machine (GBM) model was selected for this analysis due to its ability to utilize the large number of week predictors.
+### Train Control and Tuning
+GBM models can be very processing intensive to calculate for larger data frames.  In order to balance the processing demand a number choices were made to limit the size of the trees and the number of iterations that were used for boosting. The model was cross validated by using the k-fold method with 5 folds.
+
+Since the training model will run 6 times (once for each fold, and once more to vote on each predictor), to limit the total processing time I choose to set the number of trees to 800, the interaction depth of the trees are set to 5, the shrinkage (or the rate the boosting "learns") to .05 and the minimum number of observations in each leaf to 10
+
+The data was also preprocessed using principal components analysis to reduce over all processing time.
+```{r model, cache=TRUE}
+fitControl = trainControl(method = "cv", number = 5)
+
+gbmGrid <-  expand.grid(interaction.depth = c(5),
+                         n.trees = 800,
+                         shrinkage = 0.05,
+                         n.minobsinnode = 10)
+
+set.seed(5796)
+modelgbm <- train(classe~.,data=trainset,method="gbm", trControl = fitControl, tuneGrid = gbmGrid, preProcess = "pca", verbose = FALSE)
+```
+
+```{r, echo= FALSE}
+modelgbm
+```
+### Out of Sample Error Estimation
+The train fucntion in the caret package will store the Accuracy of the model that was created for each fold. Since each fold will leave out a portion of the traning data set, it is as if we created a validation set, trained the model and tested the accuracy five times.
+```{r}
+modelgbm$resample[1]
+```
+So the out of sample error rate is just one minus the accuracy.  The value shown here has been multipled by 100 for presentation:
+```{r outofsample, echo=FALSE, tidy=TRUE}
+round((1-colMeans(modelgbm$resample[1])[["Accuracy"]])*100,2)
+```
+
+### Predictions
+The testing data for the model was imported using the same technique as before and then subset to only include the coulmns that were used in the training model.
+```{r test data}
+temp<-tempfile()
+testurl <- url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+testing <- read.csv(testurl,na.strings = "NA")
+
+testColnames <- colnames(trainset[,colnames(trainset)!="classe"])
+testColnames <- append(testColnames,"problem_id")
+
+testset <- subset(testing, select = testColnames)
+```
+
+The predictions for the classification of the 20 observations in the training data set are: 
+```{r, echo=FALSE, tidy=TRUE}
+predict(modelgbm,testset)
+```
